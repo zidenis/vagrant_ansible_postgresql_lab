@@ -1,0 +1,74 @@
+---
+- name: Setup PostgreSQL servers for home lab
+  hosts: all
+  become: true
+  vars: 
+    - pg_data: "/var/lib/pgsql/{{ pg_version }}/data"
+  tasks:
+    - name: Disable the built-in PostgreSQL module
+      copy:
+        dest: /etc/dnf/modules.d/postgresql.module
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [postgresql]
+          name=postgresql
+          stream=
+          profiles=
+          state=disabled
+
+    - name: Add postgresql.org RPM GPG key
+      rpm_key: 
+        key: http://download.postgresql.org/pub/repos/yum/RPM-GPG-KEY-PGDG
+        state: present
+
+    - name: Install the postgresql.org repository RPM
+      yum:
+        name: https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+        state: present
+
+    - name: Ensure required packages are installed
+      yum:
+        name:
+          - "postgresql{{ pg_version }}-server"
+          - "postgresql{{ pg_version }}-contrib"
+          - "python3-psycopg2"      
+        state: present
+      notify: Restart PostgreSQL service
+
+    - name: Add postgresql service to firewalld
+      firewalld:
+        service: postgresql
+        permanent: yes
+        immediate: yes
+        state: enabled
+
+    - name: Check if PostgreSQL database is initialized
+      stat:
+        path: "{{ pg_data }}/PG_VERSION"
+      register: pg_data_version
+
+    - name: Initialize postgres cluster if not initialized before
+      become: yes
+      become_user: postgres
+      when: not pg_data_version.stat.exists
+      command:  "/usr/pgsql-{{ pg_version }}/bin/initdb --pgdata={{ pg_data }}"
+      notify: Restart PostgreSQL service
+
+    - name: Copy PostgreSQL configuration files
+      copy:
+        src: "{{ item }}"
+        dest: "{{ pg_data }}/{{ item }}"
+      loop:
+        - postgresql.conf
+        - pg_hba.conf 
+      notify: Restart PostgreSQL service
+
+  handlers:
+    - name: Restart PostgreSQL service
+      systemd:
+        name: "postgresql-{{ pg_version }}.service"
+        enabled: yes
+        state: restarted
+
